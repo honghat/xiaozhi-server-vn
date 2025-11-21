@@ -1,0 +1,30 @@
+# Image sản phẩm, chỉ chứa mã ứng dụng
+FROM python:3.10-slim
+
+# Cài đặt các phụ thuộc hệ thống
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libopus0 ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Thiết lập biến môi trường
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /opt/xiaozhi-esp32-server
+
+# Sao chép requirements và cài đặt dependencies
+COPY main/xiaozhi-server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Sao chép mã nguồn ứng dụng
+COPY main/xiaozhi-server .
+
+# Tạo các thư mục cần thiết
+RUN mkdir -p tmp data
+
+# Mở các cổng
+EXPOSE 8011 8012
+
+# Khởi động ứng dụng
+CMD ["python", "app.py"]
