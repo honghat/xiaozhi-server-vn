@@ -1,0 +1,114 @@
+import os
+import sys
+from loguru import logger
+from config.config_loader import load_config
+from config.settings import check_config_file
+from datetime import datetime
+
+SERVER_VERSION = "0.8.8"
+_logger_initialized = False
+
+
+def get_module_abbreviation(module_name, module_dict):
+    """Lấy tên viết tắt của mô-đun, nếu trống trả về 00
+    Nếu tên chứa dấu gạch dưới, trả về hai ký tự đầu tiên sau dấu gạch dưới
+    """
+    module_value = module_dict.get(module_name, "")
+    if not module_value:
+        return "00"
+    if "_" in module_value:
+        parts = module_value.split("_")
+        return parts[-1][:2] if parts[-1] else "00"
+    return module_value[:2]
+
+
+def build_module_string(selected_module):
+    """Xây dựng chuỗi mô-đun"""
+    return (
+        get_module_abbreviation("VAD", selected_module)
+        + get_module_abbreviation("ASR", selected_module)
+        + get_module_abbreviation("LLM", selected_module)
+        + get_module_abbreviation("TTS", selected_module)
+        + get_module_abbreviation("Memory", selected_module)
+        + get_module_abbreviation("Intent", selected_module)
+        + get_module_abbreviation("VLLM", selected_module)
+    )
+
+
+def formatter(record):
+    """Thêm giá trị mặc định cho nhật ký không có tag, và xử lý chuỗi mô-đun động"""
+    record["extra"].setdefault("tag", record["name"])
+    # Nếu chưa thiết lập selected_module, sử dụng giá trị mặc định
+    record["extra"].setdefault("selected_module", "00000000000000")
+    # Trích xuất selected_module từ extra lên cấp cao nhất để hỗ trợ định dạng {selected_module}
+    record["selected_module"] = record["extra"]["selected_module"]
+    return record["message"]
+
+
+def setup_logging():
+    check_config_file()
+    """Đọc cấu hình nhật ký từ tệp cấu hình, và thiết lập định dạng và cấp độ đầu ra nhật ký"""
+    config = load_config()
+    log_config = config["log"]
+    global _logger_initialized
+
+    # Cấu hình nhật ký khi khởi tạo lần đầu
+    if not _logger_initialized:
+        # Khởi tạo bằng chuỗi mô-đun mặc định
+        logger.configure(
+            extra={
+                "selected_module": log_config.get("selected_module", "00000000000000"),
+            }
+        )
+
+        log_format = log_config.get(
+            "log_format",
+            "<green>{time:YYMMDD HH:mm:ss}</green>[{version}_{extra[selected_module]}][<light-blue>{extra[tag]}</light-blue>]-<level>{level}</level>-<light-green>{message}</light-green>",
+        )
+        log_format_file = log_config.get(
+            "log_format_file",
+            "{time:YYYY-MM-DD HH:mm:ss} - {version}_{extra[selected_module]} - {name} - {level} - {extra[tag]} - {message}",
+        )
+        log_format = log_format.replace("{version}", SERVER_VERSION)
+        log_format_file = log_format_file.replace("{version}", SERVER_VERSION)
+
+        log_level = log_config.get("log_level", "INFO")
+        log_dir = log_config.get("log_dir", "tmp")
+        log_file = log_config.get("log_file", "server.log")
+        data_dir = log_config.get("data_dir", "data")
+
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Cấu hình đầu ra nhật ký
+        logger.remove()
+
+        # Xuất ra console
+        logger.add(sys.stdout, format=log_format, level=log_level, filter=formatter)
+
+        # Xuất ra tệp - thư mục thống nhất, xoay vòng theo kích thước
+        # Đường dẫn đầy đủ tệp nhật ký
+        log_file_path = os.path.join(log_dir, log_file)
+
+        # Thêm bộ xử lý nhật ký
+        logger.add(
+            log_file_path,
+            format=log_format_file,
+            level=log_level,
+            filter=formatter,
+            rotation="10 MB",  # Mỗi tệp tối đa 10MB
+            retention="30 days",  # Giữ lại 30 ngày
+            compression=None,
+            encoding="utf-8",
+            enqueue=True,  # An toàn không đồng bộ
+            backtrace=True,
+            diagnose=True,
+        )
+        _logger_initialized = True  # Đánh dấu là đã khởi tạo
+
+    return logger
+
+
+def create_connection_logger(selected_module_str):
+    """Tạo bộ ghi nhật ký độc lập cho kết nối, liên kết chuỗi mô-đun cụ thể"""
+    return logger.bind(selected_module=selected_module_str)
